@@ -1,9 +1,8 @@
-// Package oauthrouter routes development OAuth callbacks to approved local worktrees.
+// Package oauthrouter routes local OAuth callbacks to Portless worktree URLs.
 package oauthrouter
 
 import (
 	"errors"
-	"net"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -11,50 +10,43 @@ import (
 	"strings"
 )
 
-var namePattern = regexp.MustCompile(`^[a-zA-Z0-9_-]{1,100}$`)
+var labelPattern = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
-func ValidName(name string) bool { return namePattern.MatchString(name) }
-
-// WrapState leaves normal OAuth unchanged when development routing is disabled.
-// The original state remains the application's browser-bound, one-time secret.
-func WrapState(worktree, state string) string {
-	if worktree == "" {
-		return state
+func validHostname(host string) bool {
+	if len(host) > 253 {
+		return false
 	}
-	return "v1." + worktree + "." + state
+	for _, label := range strings.Split(host, ".") {
+		if !labelPattern.MatchString(label) {
+			return false
+		}
+	}
+	return true
 }
 
-func ValidateOrigin(origin string) error {
+func parseOrigin(origin string) (*url.URL, error) {
 	target, err := url.Parse(origin)
 	if err != nil {
-		return errors.New("invalid local origin")
+		return nil, errors.New("invalid base URL")
 	}
-	host := target.Hostname()
-	ip := net.ParseIP(host)
-	local := host == "localhost" || strings.HasSuffix(host, ".localhost") || (ip != nil && ip.IsLoopback())
-	if !local || (target.Scheme != "http" && target.Scheme != "https") || target.User != nil || target.Path != "" || target.RawQuery != "" || target.ForceQuery || strings.Contains(origin, "#") || target.Opaque != "" {
-		return errors.New("destination must be a local HTTP(S) origin without a path, query or fragment")
+	if (target.Scheme != "http" && target.Scheme != "https") || target.User != nil || target.Path != "" || target.RawQuery != "" || target.ForceQuery || strings.Contains(origin, "#") || !strings.HasSuffix(target.Hostname(), ".localhost") || !validHostname(target.Hostname()) {
+		return nil, errors.New("expected an HTTP(S) .localhost origin without a path, query or fragment")
 	}
 	if port := target.Port(); port != "" {
 		n, err := strconv.Atoi(port)
 		if err != nil || n < 1 || n > 65535 {
-			return errors.New("invalid origin port")
+			return nil, errors.New("invalid origin port")
 		}
 	}
-	return nil
+	return target, nil
 }
 
-// New copies the explicit allowlist; no destination is taken from callback URLs.
-func New(origins map[string]string, callbackPaths ...string) (http.Handler, error) {
-	destinations := make(map[string]string, len(origins))
-	for name, origin := range origins {
-		if !ValidName(name) {
-			return nil, errors.New("invalid worktree name")
-		}
-		if err := ValidateOrigin(origin); err != nil {
-			return nil, err
-		}
-		destinations[name] = origin
+// New derives destinations under baseURL; it does not read Git or registration files.
+// An empty worktree prefix routes to the base URL itself (the main checkout).
+func New(baseURL string, callbackPaths ...string) (http.Handler, error) {
+	base, err := parseOrigin(baseURL)
+	if err != nil {
+		return nil, err
 	}
 	if len(callbackPaths) == 0 {
 		callbackPaths = []string{"/oauth/callback"}
@@ -85,17 +77,22 @@ func New(origins map[string]string, callbackPaths ...string) (http.Handler, erro
 			return
 		}
 		parts := strings.SplitN(query.Get("state"), ".", 3)
-		if len(parts) != 3 || parts[0] != "v1" || parts[2] == "" {
+		if len(parts) != 3 || parts[0] != "v2" || parts[2] == "" || (parts[1] != "" && !labelPattern.MatchString(parts[1])) {
 			http.Error(w, "invalid routing state", 400)
 			return
 		}
-		origin, ok := destinations[parts[1]]
-		if !ok {
-			http.Error(w, "unknown worktree", 400)
+		destination := *base
+		if parts[1] != "" {
+			destination.Host = parts[1] + "." + base.Host
+		}
+		if len(destination.Hostname()) > 253 {
+			http.Error(w, "invalid routing state", 400)
 			return
 		}
+		destination.Path = r.URL.Path
 		query.Set("state", parts[2])
-		w.Header().Set("Location", origin+r.URL.Path+"?"+query.Encode())
+		destination.RawQuery = query.Encode()
+		w.Header().Set("Location", destination.String())
 		w.WriteHeader(http.StatusFound)
 	}), nil
 }

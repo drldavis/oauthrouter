@@ -1,97 +1,93 @@
 # oauthrouter
 
-A standalone Go server that redirects local OAuth callbacks to the worktree that
-started the connection. It also exports a small Go library for wrapping state and
-managing approved destinations. The implementation uses only the Go standard
-library.
+Route local OAuth callbacks to the Portless worktree that started the connection.
+A standalone Go server and a small Go helper, using only the standard library.
 
-## Build and run
+## Setup
 
-Requires Go 1.25.11 or newer.
-
-```sh
-go install github.com/drldavis/oauthrouter/cmd/oauthrouter@v0.1.0
-```
-
-Or clone the repository and run `make build`; the binary is written to `bin/oauthrouter`.
-
-From your application's checkout, register a worktree and start the server:
+Requires Go 1.25.11 or newer and [Portless](https://portless.sh/) on your application's
+PATH. Use Portless's default `.localhost` domains.
 
 ```sh
-oauthrouter register \
-  -name feature -origin https://feature.myapp.localhost
-oauthrouter serve
+go install github.com/drldavis/oauthrouter/cmd/oauthrouter@v0.2.0
+go get github.com/drldavis/oauthrouter@v0.2.0
 ```
 
-It listens on `127.0.0.1:9090`. By default, registrations live in the calling
-repository's shared Git directory under `oauth-router/`, so its worktrees share
-one registry. Outside Git, pass `-routes /path/to/registrations` to every command.
-Use one server per registry. Registrations are reread on each callback.
-
-The default callback path is `/oauth/callback`. Configure additional or different
-paths explicitly (supplying flags replaces the default):
+Run your app through `portless run --name myapp <your-app-command>` from its checkout.
+Start the callback server from any directory:
 
 ```sh
-oauthrouter serve -callback-path /auth/provider-a/callback -callback-path /auth/provider-b/callback
+oauthrouter serve -base-url https://myapp.localhost
 ```
 
-Register the server's stable local callback URL with each provider, using a scheme
-and hostname that provider accepts. The server itself speaks HTTP; an existing
-local HTTPS proxy can sit in front of it when HTTPS is required. No public tunnel
-is needed for browser redirects to an accepted local URL.
+It listens on `127.0.0.1:9090`, with `/oauth/callback` as its default callback path.
+Configure each provider and your application's OAuth redirect URI to use
+`http://localhost:9090/oauth/callback` (if that provider accepts local HTTP).
+Use that same URI when exchanging the authorization code.
+For other callback paths, supply one flag per path:
+
+```sh
+oauthrouter serve -base-url https://myapp.localhost \
+  -callback-path /auth/provider-a/callback \
+  -callback-path /auth/provider-b/callback
+```
+
+Flags replace the default callback path. `-listen 127.0.0.1:9090` changes the
+loopback listener. The server speaks HTTP; providers requiring HTTPS need a local
+HTTPS proxy in front of it. The base URL must match Portless's scheme, app name,
+and port; for example `http://myapp.localhost:1355` for that Portless configuration.
 
 ## Application integration
 
-The application preserves its existing random OAuth state and browser binding,
-then wraps only the state sent to the provider:
+Create a wrapper once during application startup, from the app's checkout:
 
 ```go
-import "github.com/drldavis/oauthrouter"
-
-providerState := oauthrouter.WrapState(worktreeName, originalState)
+wrapper, err := oauthrouter.NewWrapper("myapp")
+if err != nil {
+    return err
+}
 ```
 
-This produces `v1.<worktree-name>.<original-state>`. An empty worktree name leaves
-state unchanged. The router resolves the name against its local allowlist and
-redirects the browser to the approved origin and original callback path, restoring
-the original state and preserving success or denial parameters.
+When building the provider's authorization request:
 
-The application still validates the original state, browser cookie, expiry and
-single-use attempt, then exchanges the code using the registered router callback
-URI. Each worktree retains its own database and credentials. The router does not
-exchange codes, store credentials, or authenticate OAuth attempts.
-
-Add the library to a consuming Go project with:
-
-```sh
-go get github.com/drldavis/oauthrouter@v0.1.0
+```go
+providerState := wrapper.Wrap(originalState)
 ```
 
-## Commands
+Keep storing and validating `originalState` as before. Send only `providerState`
+to the provider. The helper runs `portless get myapp` once at startup to discover
+the worktree prefix, so every worktree uses the same code. Startup fails if
+Portless is missing or returns an incompatible URL. No subprocess runs per login.
 
-```sh
-oauthrouter serve -listen 127.0.0.1:9090 -routes /path/to/registrations
-oauthrouter register -name feature -origin https://feature.myapp.localhost -routes /path/to/registrations
-oauthrouter unregister -name feature -routes /path/to/registrations
-```
+The server restores the original state before redirecting:
 
-Worktree names accept letters, digits, underscores and hyphens. Origins must be
-HTTP(S) on loopback addresses or `localhost`/`.localhost`, with no path, query or
-fragment. Listeners must use a loopback IP. There is no HTTP registration endpoint;
-registrations are local files and updates are atomic.
+| Checkout | Wrapped state | Destination |
+| --- | --- | --- |
+| Main | `v2..nonce` | `https://myapp.localhost/oauth/callback` |
+| Worktree with prefix `feature-a` | `v2.feature-a.nonce` | `https://feature-a.myapp.localhost/oauth/callback` |
 
-Use distinct hostnames for simultaneous connection flows: localhost ports share
-cookies. Start and finish the flow on the same worktree hostname. Portless or
-another local proxy can supply those hostnames; installing that proxy is separate.
+The callback path and other query parameters are preserved. The server needs no
+Git checkout, registration directory, or per-worktree setup. It constructs the
+destination under its configured base URL. Start and finish a flow on the same
+worktree hostname so the application's browser cookie remains available.
 
-All registered worktrees and local configuration are trusted. This tool is for
-local development, not public or production authentication. Responses suppress
-caching and referrers; callback parameters and authorization codes are not logged.
+## Boundaries
 
-Provider-specific environment setup, lifecycle hooks, and provider integration
-tests belong in the consuming project.
+This is a local development tool for trusted worktrees. It handles GET query
+callbacks using OAuth `state`; POST callbacks and flows without state are not
+supported. Custom Portless TLDs are not supported.
 
-## Verify
+The application still validates its random state, browser cookie, expiry, and
+single-use attempt. The router does not authenticate attempts, exchange codes,
+or store credentials. Destinations stay under the configured `.localhost` base;
+responses disable caching and referrers. Callback codes are not logged.
+
+Version 0.2 replaces the 0.1 registration API and `v1` state format. Remove
+register/unregister hooks and `WrapState` calls, use `NewWrapper` instead, and
+restart outstanding login flows. The server and consuming app must be upgraded
+together.
+
+## Development
 
 ```sh
 make test
@@ -99,6 +95,7 @@ make lint
 make build
 ```
 
-Tests cover callbacks across multiple destinations, provider denials, invalid
-requests/origins, live registration changes, and command validation. Live provider
-login and callback URL acceptance need to be checked in the consuming application.
+The binary is written to `bin/oauthrouter`. Tests cover startup discovery,
+main/worktree routing, original-state restoration, provider denials, malformed
+callbacks, destination validation, and CLI validation. Live provider login and
+callback URL acceptance must be checked in the consuming application.
