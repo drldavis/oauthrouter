@@ -72,19 +72,22 @@ authorization start and final callback on the same hostname (see
 ## Vite + separate backend
 
 If Vite already proxies API requests to Go, keep that arrangement. Run **Vite**
-through Portless, and use its app name and base URL for oauthrouter. Run these
-in separate terminals:
+through Portless, and use its app name for oauthrouter. Run these in separate
+terminals:
 
 ```sh
+# In each worktree:
 portless run --name myapp vite
-oauthrouter serve -base-url https://myapp.localhost
+
+# Once, from the main checkout:
+oauthrouter serve -app-name myapp
 ```
 
 In Go, use `oauthrouter.NewWrapper("myapp")` in the [startup example above](#handler-integration).
 Run Go from the same worktree so `portless get myapp` discovers that worktree's
-Vite hostname. Match `-base-url` to Vite's Portless scheme and port, without the
-worktree prefix. The shared router callback URL registered with the provider
-remains `http://localhost:9090/oauth/callback`.
+Vite hostname. The shared router discovers the main Vite URL from the main
+checkout, including scheme and port. The shared router callback URL registered
+with the provider remains `http://localhost:9090/oauth/callback`.
 
 Add callback forwarding alongside your existing API routes in Vite's
 [`server.proxy`](https://vite.dev/config/server-options#server-proxy) configuration:
@@ -129,8 +132,9 @@ oauthrouter itself does not need the application's cookie.
 ### Direct-backend alternative
 
 If the browser already sends authorization-start requests directly to a separately
-named backend, use **that backend's** Portless name in `NewWrapper` and its base
-URL in `-base-url`. The worktree callback destination will then be the backend's
+named backend, use **that backend's** Portless name in both `NewWrapper` and
+`-app-name`. Run the shared router from the main checkout. The worktree callback
+destination will then be the backend's
 hostname, matching the authorization-start hostname.
 
 Do not bypass an existing Vite API proxy just to adopt oauthrouter; that can add
@@ -147,7 +151,7 @@ the shared router callback URL.
 Use `-callback-path` for a different path, or repeat it for multiple providers:
 
 ```sh
-oauthrouter serve -base-url https://myapp.localhost \
+oauthrouter serve -app-name myapp \
   -callback-path /auth/provider-a/callback \
   -callback-path /auth/provider-b/callback
 ```

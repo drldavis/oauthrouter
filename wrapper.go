@@ -1,11 +1,8 @@
 package oauthrouter
 
 import (
-	"context"
 	"fmt"
-	"os/exec"
 	"strings"
-	"time"
 )
 
 // Wrapper remembers the Portless worktree prefix discovered at startup.
@@ -15,20 +12,9 @@ type Wrapper struct{ prefix string }
 // NewWrapper runs "portless get <appName>" once in the application's working
 // directory. Portless must be installed on PATH and use its .localhost naming.
 func NewWrapper(appName string) (*Wrapper, error) {
-	if !validHostname(appName) || strings.HasSuffix(appName, ".localhost") {
-		return nil, fmt.Errorf("app name must be a DNS name without the .localhost suffix")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	command := exec.CommandContext(ctx, "portless", "get", appName)
-	command.WaitDelay = time.Second
-	output, err := command.Output()
+	origin, err := discoverOrigin(appName)
 	if err != nil {
-		return nil, fmt.Errorf("discover worktree with portless get %q: %w", appName, err)
-	}
-	origin, err := parseOrigin(strings.TrimSpace(string(output)))
-	if err != nil {
-		return nil, fmt.Errorf("portless returned an invalid app URL: %w", err)
+		return nil, err
 	}
 	baseHost := appName + ".localhost"
 	host := origin.Hostname()

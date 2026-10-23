@@ -22,15 +22,16 @@ From your app's checkout, use the same Portless app name in every worktree.
 portless run --name myapp <your-app-command>
 ```
 
-In another terminal:
+In another terminal, from the **main checkout**:
 
 ```sh
 go install github.com/drldavis/oauthrouter/cmd/oauthrouter@latest
-oauthrouter serve -base-url https://myapp.localhost
+oauthrouter serve -app-name myapp
 ```
 
-Use your Portless base URL without a worktree prefix. Match its scheme and port;
-for example, your setup may use `http://myapp.localhost:1355`.
+Run one shared router for all worktrees. It calls `portless get myapp` at startup
+to discover the main app's URL, including HTTP/HTTPS and port. Startup fails if
+Portless is unavailable or returns a worktree URL instead of the main URL.
 
 ### 2. Set one callback address
 
@@ -101,9 +102,9 @@ hostname so your app receives its verification cookie.
 ## Vite + Go
 
 If Vite already proxies API requests to Go, keep that arrangement. Run **Vite**
-through Portless, pass Vite's app name to `NewWrapper`, and use Vite's base URL
-for the router. Proxy both login and callback paths to the Go server for that
-worktree. The shared router callback URL stays the same.
+through Portless, and pass Vite's app name to both `NewWrapper` and the router
+(`-app-name`). Run the shared router from the main checkout. Proxy both login
+and callback paths to the Go server for that worktree. The shared router callback URL stays the same.
 
 See the [Vite proxy example and cookie explanation](docs/integration.md#vite--separate-backend).
 Apps that already send login requests directly to a named backend can use the
