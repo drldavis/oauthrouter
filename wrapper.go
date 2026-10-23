@@ -44,4 +44,4 @@ func NewWrapper(appName string) (*Wrapper, error) {
 
 // Wrap preserves the application's original state inside a routing envelope.
 // Call this only when sending state to the provider; keep the original for validation.
-func (w *Wrapper) Wrap(state string) string { return "v2." + w.prefix + "." + state }
+func (w *Wrapper) Wrap(state string) string { return w.prefix + "." + state }

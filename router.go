@@ -76,21 +76,21 @@ func New(baseURL string, callbackPaths ...string) (http.Handler, error) {
 			http.Error(w, "invalid callback", 400)
 			return
 		}
-		parts := strings.SplitN(query.Get("state"), ".", 3)
-		if len(parts) != 3 || parts[0] != "v2" || parts[2] == "" || (parts[1] != "" && !labelPattern.MatchString(parts[1])) {
+		parts := strings.SplitN(query.Get("state"), ".", 2)
+		if len(parts) != 2 || parts[1] == "" || (parts[0] != "" && !labelPattern.MatchString(parts[0])) {
 			http.Error(w, "invalid routing state", 400)
 			return
 		}
 		destination := *base
-		if parts[1] != "" {
-			destination.Host = parts[1] + "." + base.Host
+		if parts[0] != "" {
+			destination.Host = parts[0] + "." + base.Host
 		}
 		if len(destination.Hostname()) > 253 {
 			http.Error(w, "invalid routing state", 400)
 			return
 		}
 		destination.Path = r.URL.Path
-		query.Set("state", parts[2])
+		query.Set("state", parts[1])
 		destination.RawQuery = query.Encode()
 		w.Header().Set("Location", destination.String())
 		w.WriteHeader(http.StatusFound)

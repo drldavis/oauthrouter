@@ -27,10 +27,10 @@ func fakePortless(t *testing.T, output string) (string, string) {
 }
 
 func TestWrapperDiscoversPortlessOnceAndRoutesMainAndLinkedWorktrees(t *testing.T) {
-	for _, test := range []struct{ output, destination string }{
-		{"https://myapp.localhost", "https://myapp.localhost"},
-		{"https://feature-login.myapp.localhost\n", "https://feature-login.myapp.localhost"},
-		{"http://feature-login.myapp.localhost:1355", "http://feature-login.myapp.localhost:1355"},
+	for _, test := range []struct{ output, destination, prefix string }{
+		{"https://myapp.localhost", "https://myapp.localhost", ""},
+		{"https://feature-login.myapp.localhost\n", "https://feature-login.myapp.localhost", "feature-login"},
+		{"http://feature-login.myapp.localhost:1355", "http://feature-login.myapp.localhost:1355", "feature-login"},
 	} {
 		t.Run(test.destination, func(t *testing.T) {
 			script, calls := fakePortless(t, test.output)
@@ -55,6 +55,9 @@ func TestWrapperDiscoversPortlessOnceAndRoutesMainAndLinkedWorktrees(t *testing.
 			}
 			router, _ := oauthrouter.New(base)
 			for _, original := range []string{"random-one", "random.two+three"} {
+				if got := wrapper.Wrap(original); got != test.prefix+"."+original {
+					t.Fatalf("wrong wrapped state: %q", got)
+				}
 				response := httptest.NewRecorder()
 				router.ServeHTTP(response, httptest.NewRequest("GET", "/oauth/callback?state="+url.QueryEscape(wrapper.Wrap(original))+"&code=code", nil))
 				target, _ := url.Parse(response.Header().Get("Location"))

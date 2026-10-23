@@ -21,7 +21,7 @@ func TestCallbacksDeriveDestinationsWithoutRegistrations(t *testing.T) {
 			for _, path := range []string{"/auth/a/callback", "/auth/b/callback"} {
 				for _, result := range []string{"code=secret%2Bcode", "error=access_denied&error_description=No+thanks"} {
 					response := httptest.NewRecorder()
-					handler.ServeHTTP(response, httptest.NewRequest("GET", path+"?state="+url.QueryEscape("v2."+prefix+".original.token+")+"&"+result, nil))
+					handler.ServeHTTP(response, httptest.NewRequest("GET", path+"?state="+url.QueryEscape(prefix+".original.token+")+"&"+result, nil))
 					if response.Code != 302 {
 						t.Fatalf("status %d", response.Code)
 					}
@@ -53,14 +53,14 @@ func TestCallbacksDeriveDestinationsWithoutRegistrations(t *testing.T) {
 
 func TestMalformedRoutingStateCannotEscapeBaseDomain(t *testing.T) {
 	handler, _ := oauthrouter.New("https://myapp.localhost")
-	for _, state := range []string{"", "plain", "v1.feature.token", "v2.feature.", "v2.-bad.token", "v2.bad-.token", "v2.bad_name.token", "v2.https://evil.example.token", "v2.user@evil.token", "v2.feature/path.token", "v2.%2e%2e.token", "v2." + strings.Repeat("a", 64) + ".token"} {
+	for _, state := range []string{"", "plain", ".", "feature.", "-bad.token", "bad-.token", "bad_name.token", "https://evil.example.token", "user@evil.token", "feature/path.token", "%2e%2e.token", strings.Repeat("a", 64) + ".token"} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("GET", "/oauth/callback?state="+url.QueryEscape(state)+"&code=code", nil))
 		if response.Code != 400 || response.Header().Get("Location") != "" {
 			t.Fatalf("accepted %q", state)
 		}
 	}
-	for _, query := range []string{"state=v2.a.token&state=v2.b.token", "state=v2.a.token&code=a&code=b", "state=v2.a.token&error=a&error=b", "state=v2.a.token&code=a&error=denied", "state=%zz", "state=" + strings.Repeat("a", 9000)} {
+	for _, query := range []string{"state=a.token&state=b.token", "state=a.token&code=a&code=b", "state=a.token&error=a&error=b", "state=a.token&code=a&error=denied", "state=%zz", "state=" + strings.Repeat("a", 9000)} {
 		response := httptest.NewRecorder()
 		handler.ServeHTTP(response, httptest.NewRequest("GET", "/oauth/callback?"+query, nil))
 		if response.Code != 400 {
@@ -91,7 +91,7 @@ func TestBaseURLAndCallbackPathsAreValidated(t *testing.T) {
 	}
 	for path, want := range map[string]int{"/custom/callback": 302, "/oauth/callback": 404} {
 		response := httptest.NewRecorder()
-		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path+"?state=v2..original&code=code", nil))
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path+"?state=.original&code=code", nil))
 		if response.Code != want {
 			t.Fatalf("%s: %d", path, response.Code)
 		}

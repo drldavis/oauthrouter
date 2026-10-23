@@ -1,30 +1,130 @@
 # oauthrouter
 
-Route local OAuth callbacks to the Portless worktree that started the connection.
-A standalone Go server and a small Go helper, using only the standard library.
+Use one OAuth callback URL for all your local Git worktrees. oauthrouter sends
+each login back to the copy of your app that started it, so you don't need to
+register a callback URL for every branch.
+
+It works with [Portless](https://portless.sh/), which gives each worktree its own
+local hostname:
+
+```text
+feature-a.myapp.localhost → OAuth provider
+                                  ↓
+                   localhost:9090/oauth/callback
+                                  ↓
+                feature-a.myapp.localhost/oauth/callback
+```
+
+Your app still completes the login. The router just redirects the browser to
+the right worktree.
 
 ## Setup
 
-Requires Go 1.25.11 or newer and [Portless](https://portless.sh/) on your application's
-PATH. Use Portless's default `.localhost` domains.
+Requires Go 1.25.11+, an existing OAuth flow, and Portless on your app's `PATH`.
+
+### 1. Start your app and the router
+
+Run your app from its checkout, using the same app name in each worktree:
 
 ```sh
-go install github.com/drldavis/oauthrouter/cmd/oauthrouter@v0.2.0
-go get github.com/drldavis/oauthrouter@v0.2.0
+portless run --name myapp <your-app-command>
 ```
 
-Run your app through `portless run --name myapp <your-app-command>` from its checkout.
-Start the callback server from any directory:
+In another terminal, install and start the router:
 
 ```sh
+go install github.com/drldavis/oauthrouter/cmd/oauthrouter@latest
 oauthrouter serve -base-url https://myapp.localhost
 ```
 
-It listens on `127.0.0.1:9090`, with `/oauth/callback` as its default callback path.
-Configure each provider and your application's OAuth redirect URI to use
-`http://localhost:9090/oauth/callback` (if that provider accepts local HTTP).
-Use that same URI when exchanging the authorization code.
-For other callback paths, supply one flag per path:
+Use your app's base URL **without a worktree prefix**, matching Portless's scheme
+and port (for example, `http://myapp.localhost:1355`). The router listens on
+`127.0.0.1:9090` by default.
+
+### 2. Set the callback URL
+
+In your provider settings and your app's local OAuth configuration, use:
+
+```text
+http://localhost:9090/oauth/callback
+```
+
+Use the same redirect URI when exchanging the authorization code. Your app must
+handle callbacks at `/oauth/callback`; see [Options](#options) for other paths.
+Providers requiring HTTPS need a local HTTPS proxy in front of the router.
+
+### 3. Add the wrapper to your app
+
+```sh
+go get github.com/drldavis/oauthrouter@latest
+```
+
+Import `github.com/drldavis/oauthrouter`. Pass the wrapper into your auth handler,
+and wrap the outgoing state after storing the original in the user's session:
+
+```go
+type AuthHandler struct {
+    wrapper *oauthrouter.Wrapper
+}
+
+func NewAuthHandler(wrapper *oauthrouter.Wrapper) *AuthHandler {
+    return &AuthHandler{wrapper: wrapper}
+}
+
+func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
+    // Generate a random state and store the original in the user's session.
+    originalState, err := generateAndStoreOAuthState(w, r)
+    if err != nil {
+        http.Error(w, "could not start login", http.StatusInternalServerError)
+        return
+    }
+
+    providerState := originalState
+    if h.wrapper != nil {
+        providerState = h.wrapper.Wrap(originalState)
+    }
+
+    authorizationURL := buildAuthorizationURL(providerState)
+    http.Redirect(w, r, authorizationURL, http.StatusFound)
+}
+```
+
+Then wire it up during application startup:
+
+```go
+var wrapper *oauthrouter.Wrapper
+if config.LocalOAuthRouting {
+    // Run from the app's checkout, using the same app name as Portless.
+    var err error
+    wrapper, err = oauthrouter.NewWrapper("myapp")
+    if err != nil {
+        return err
+    }
+}
+
+authHandler := NewAuthHandler(wrapper)
+mux.HandleFunc("/login", authHandler.Login)
+```
+
+`generateAndStoreOAuthState` and `buildAuthorizationURL` stand for your app's
+existing OAuth code. Pass `providerState` as the authorization request's `state`
+parameter, keeping your other provider parameters unchanged.
+
+`config.LocalOAuthRouting` is your app's flag. Leave it false in production:
+the wrapper stays nil, Portless is never called, and state is sent unchanged.
+Use your normal production callback URL there.
+
+When enabled, `NewWrapper` runs `portless get myapp` once from your app's checkout.
+It returns an error if discovery fails. The router restores the original state
+before forwarding the callback, so your callback handler needs no wrapper.
+
+Start a login from a worktree's Portless URL to check the full flow. You should
+return to that same hostname, where your app can read its session cookie and
+validate the original state.
+
+## Options
+
+Use `-callback-path` for a different path, or repeat it for multiple providers:
 
 ```sh
 oauthrouter serve -base-url https://myapp.localhost \
@@ -32,60 +132,34 @@ oauthrouter serve -base-url https://myapp.localhost \
   -callback-path /auth/provider-b/callback
 ```
 
-Flags replace the default callback path. `-listen 127.0.0.1:9090` changes the
-loopback listener. The server speaks HTTP; providers requiring HTTPS need a local
-HTTPS proxy in front of it. The base URL must match Portless's scheme, app name,
-and port; for example `http://myapp.localhost:1355` for that Portless configuration.
+These replace the default `/oauth/callback`. Register the matching router URLs
+with your providers; each path is preserved when redirecting to your app.
 
-## Application integration
+Use `-listen 127.0.0.1:9091` to change the port, and update your redirect URIs to
+match. The listen address must be a loopback IP.
 
-Create a wrapper once during application startup, from the app's checkout:
+## How it works
 
-```go
-wrapper, err := oauthrouter.NewWrapper("myapp")
-if err != nil {
-    return err
-}
-```
+The wrapper sends state as `<worktree-prefix>.<original-state>`:
 
-When building the provider's authorization request:
-
-```go
-providerState := wrapper.Wrap(originalState)
-```
-
-Keep storing and validating `originalState` as before. Send only `providerState`
-to the provider. The helper runs `portless get myapp` once at startup to discover
-the worktree prefix, so every worktree uses the same code. Startup fails if
-Portless is missing or returns an incompatible URL. No subprocess runs per login.
-
-The server restores the original state before redirecting:
-
-| Checkout | Wrapped state | Destination |
+| State sent to provider | Destination hostname | State received by app |
 | --- | --- | --- |
-| Main | `v2..nonce` | `https://myapp.localhost/oauth/callback` |
-| Worktree with prefix `feature-a` | `v2.feature-a.nonce` | `https://feature-a.myapp.localhost/oauth/callback` |
+| `.nonce` | `myapp.localhost` | `nonce` |
+| `feature-a.nonce` | `feature-a.myapp.localhost` | `nonce` |
 
-The callback path and other query parameters are preserved. The server needs no
-Git checkout, registration directory, or per-worktree setup. It constructs the
-destination under its configured base URL. Start and finish a flow on the same
-worktree hostname so the application's browser cookie remains available.
+The router splits at the first dot, preserving any dots in the original state.
+Callback paths and other query parameters are preserved. No worktree registration
+is needed.
 
-## Boundaries
+## Scope
 
-This is a local development tool for trusted worktrees. It handles GET query
-callbacks using OAuth `state`; POST callbacks and flows without state are not
-supported. Custom Portless TLDs are not supported.
+This is for local development with trusted worktrees and Portless `.localhost`
+domains. It supports GET callbacks with OAuth `state`, not POST callbacks or
+flows without state.
 
-The application still validates its random state, browser cookie, expiry, and
-single-use attempt. The router does not authenticate attempts, exchange codes,
-or store credentials. Destinations stay under the configured `.localhost` base;
-responses disable caching and referrers. Callback codes are not logged.
-
-Version 0.2 replaces the 0.1 registration API and `v1` state format. Remove
-register/unregister hooks and `WrapState` calls, use `NewWrapper` instead, and
-restart outstanding login flows. The server and consuming app must be upgraded
-together.
+Your app still validates state, cookies, expiration, and single-use attempts,
+and exchanges codes for tokens. The router does not authenticate users or store
+credentials. Callback codes are not logged; responses disable caching and referrers.
 
 ## Development
 
@@ -95,7 +169,4 @@ make lint
 make build
 ```
 
-The binary is written to `bin/oauthrouter`. Tests cover startup discovery,
-main/worktree routing, original-state restoration, provider denials, malformed
-callbacks, destination validation, and CLI validation. Live provider login and
-callback URL acceptance must be checked in the consuming application.
+The binary is written to `bin/oauthrouter`.
