@@ -24,7 +24,8 @@ Requires Go 1.25.11+, an existing OAuth flow, and Portless on your app's `PATH`.
 
 ### 1. Start your app and the router
 
-Run your app from its checkout, using the same app name in each worktree:
+Run your server from its checkout, using the same app name in each worktree.
+For separate servers, see [Vite + separate backend](#vite--separate-backend).
 
 ```sh
 portless run --name myapp <your-app-command>
@@ -43,14 +44,15 @@ and port (for example, `http://myapp.localhost:1355`). The router listens on
 
 ### 2. Set the callback URL
 
-In your provider settings and your app's local OAuth configuration, use:
+- **Shared router callback URL:** `http://localhost:9090/oauth/callback`. Register
+  it with the provider and supply it as `redirect_uri` during authorization and
+  code exchange.
+- **Worktree callback destination:** for example,
+  `https://feature-a.myapp.localhost/oauth/callback`. oauthrouter redirects the
+  browser here afterward, using the worktree discovered by `portless get`.
+  You do not configure a callback URL for each branch.
 
-```text
-http://localhost:9090/oauth/callback
-```
-
-Use the same redirect URI when exchanging the authorization code. Your app must
-handle callbacks at `/oauth/callback`; see [Options](#options) for other paths.
+Your app must handle `/oauth/callback`; see [Options](#options) for other paths.
 Providers requiring HTTPS need a local HTTPS proxy in front of the router.
 
 ### 3. Add the wrapper to your app
@@ -116,11 +118,82 @@ Use your normal production callback URL there.
 
 When enabled, `NewWrapper` runs `portless get myapp` once from your app's checkout.
 It returns an error if discovery fails. The router restores the original state
-before forwarding the callback, so your callback handler needs no wrapper.
+before redirecting the browser to the worktree callback destination. Your callback
+handler needs no wrapper.
 
-Start a login from a worktree's Portless URL to check the full flow. You should
-return to that same hostname, where your app can read its session cookie and
-validate the original state.
+Start a login from a worktree's Portless URL to check the full flow. Keep the
+authorization start and final callback on the same hostname (see
+[Cookies](#cookies)).
+
+## Vite + separate backend
+
+If Vite already proxies API requests to Go, keep that arrangement. Run **Vite**
+through Portless, and use its app name and base URL for oauthrouter. Run these
+in separate terminals:
+
+```sh
+portless run --name myapp vite
+oauthrouter serve -base-url https://myapp.localhost
+```
+
+In Go, use `oauthrouter.NewWrapper("myapp")` in the startup example above.
+Run Go from the same worktree so `portless get myapp` discovers that worktree's
+Vite hostname. Match `-base-url` to Vite's Portless scheme and port, without the
+worktree prefix. The shared router callback URL registered with the provider
+remains `http://localhost:9090/oauth/callback`.
+
+Add callback forwarding alongside your existing API routes in Vite's
+[`server.proxy`](https://vite.dev/config/server-options#server-proxy) configuration:
+
+```js
+server: {
+  proxy: {
+    "/api": "http://localhost:8080",
+    "/oauth": "http://localhost:8080",
+  },
+}
+```
+
+`8080` is illustrative: both targets must point to the Go server belonging to
+**that worktree**. Start authorization through a proxied route, such as
+`/api/login` or `/oauth/login`; if using the earlier `/login` example, proxy that
+path too. Proxy your actual callback paths if they differ from `/oauth/callback`.
+
+```text
+OAuth provider
+  → shared oauthrouter callback: http://localhost:9090/oauth/callback
+  → worktree's Vite hostname: https://feature-a.myapp.localhost/oauth/callback
+  → Vite forwards the callback request to that worktree's Go server
+```
+
+oauthrouter **redirects the browser** to the worktree callback destination.
+Vite **forwards the HTTP request internally** to Go. Go validates the callback
+and exchanges the code, using the shared router callback URL as `redirect_uri`.
+
+### Cookies
+
+For the common host-only cookie setup (no `Domain` attribute), the authorization-start
+response sets a cookie for the hostname the browser requested. The browser must
+send that cookie to the callback handler later. Keep authorization initiation
+and the final callback on the same hostname.
+
+Vite's proxy preserves this arrangement: Go generates and validates the cookie,
+but the browser receives it from and sends it to the worktree's Vite hostname.
+The proxy passes it to Go with the callback request. The cookie's `Path` must
+cover the callback, and its `Secure` and `SameSite` settings must allow the flow.
+oauthrouter itself does not need the application's cookie.
+
+### Direct-backend alternative
+
+If the browser already sends authorization-start requests directly to a separately
+named backend, use **that backend's** Portless name in `NewWrapper` and its base
+URL in `-base-url`. The worktree callback destination will then be the backend's
+hostname, matching the authorization-start hostname.
+
+Do not bypass an existing Vite API proxy just to adopt oauthrouter; that can add
+credentialed cross-origin requests and unnecessary CORS configuration. Vite,
+proxying, and environment variables are application choices, not oauthrouter
+requirements.
 
 ## Options
 
@@ -132,17 +205,17 @@ oauthrouter serve -base-url https://myapp.localhost \
   -callback-path /auth/provider-b/callback
 ```
 
-These replace the default `/oauth/callback`. Register the matching router URLs
-with your providers; each path is preserved when redirecting to your app.
+These replace the default `/oauth/callback`. Register the matching shared router
+callback URLs with your providers; each path is preserved when redirecting to your app.
 
-Use `-listen 127.0.0.1:9091` to change the port, and update your redirect URIs to
-match. The listen address must be a loopback IP.
+Use `-listen 127.0.0.1:9091` to change the port, and update your shared router
+callback URLs to match. The listen address must be a loopback IP.
 
 ## How it works
 
 The wrapper sends state as `<worktree-prefix>.<original-state>`:
 
-| State sent to provider | Destination hostname | State received by app |
+| State sent to provider | Worktree callback destination hostname | State received by app |
 | --- | --- | --- |
 | `.nonce` | `myapp.localhost` | `nonce` |
 | `feature-a.nonce` | `feature-a.myapp.localhost` | `nonce` |
