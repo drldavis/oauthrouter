@@ -3,6 +3,7 @@ package oauthrouter
 
 import (
 	"errors"
+	"log"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -42,7 +43,7 @@ func parseOrigin(origin string) (*url.URL, error) {
 }
 
 // New derives destinations under baseURL; it does not read Git or registration files.
-// An empty worktree prefix routes to the base URL itself (the main checkout).
+// An empty worktree prefix routes to the base URL itself.
 func New(baseURL string, callbackPaths ...string) (http.Handler, error) {
 	base, err := parseOrigin(baseURL)
 	if err != nil {
@@ -94,5 +95,6 @@ func New(baseURL string, callbackPaths ...string) (http.Handler, error) {
 		destination.RawQuery = query.Encode()
 		w.Header().Set("Location", destination.String())
 		w.WriteHeader(http.StatusFound)
+		log.Printf("OAuth callback redirect: %s://%s%s", destination.Scheme, destination.Host, destination.EscapedPath())
 	}), nil
 }

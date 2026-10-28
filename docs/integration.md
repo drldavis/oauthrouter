@@ -79,14 +79,14 @@ terminals:
 # In each worktree:
 portless run --name myapp vite
 
-# Once, from the main checkout:
+# Once, from the main or master branch:
 oauthrouter serve -app-name myapp
 ```
 
 In Go, use `oauthrouter.NewWrapper("myapp")` in the [startup example above](#handler-integration).
 Run Go from the same worktree so `portless get myapp` discovers that worktree's
-Vite hostname. The shared router discovers the main Vite URL from the main
-checkout, including scheme and port. The shared router callback URL registered
+Vite hostname. Run the shared router from `main` or `master` to discover the
+Vite URL without a worktree prefix, including scheme and port. The shared router callback URL registered
 with the provider remains `http://localhost:9090/oauth/callback`.
 
 Add callback forwarding alongside your existing API routes in Vite's
@@ -133,7 +133,7 @@ oauthrouter itself does not need the application's cookie.
 
 If the browser already sends authorization-start requests directly to a separately
 named backend, use **that backend's** Portless name in both `NewWrapper` and
-`-app-name`. Run the shared router from the main checkout. The worktree callback
+`-app-name`. Run the shared router from `main` or `master`. The worktree callback
 destination will then be the backend's
 hostname, matching the authorization-start hostname.
 
@@ -183,5 +183,6 @@ flows without state.
 
 Your app still validates state, cookies, expiration, and single-use attempts,
 and exchanges codes for tokens. The router does not authenticate users or store
-credentials. Callback codes are not logged; responses disable caching and referrers.
+credentials. Each redirect logs its destination hostname and path. Query parameters, including
+authorization codes and state, are not logged. Responses disable caching and referrers.
 

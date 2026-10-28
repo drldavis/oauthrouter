@@ -55,10 +55,10 @@ func TestCommandDiscoversAppBeforeStartingListener(t *testing.T) {
 	}
 }
 
-func TestCommandRejectsLinkedWorktree(t *testing.T) {
+func TestCommandRejectsWorktreePrefix(t *testing.T) {
 	commandPortless(t, "https://feature.myapp.localhost")
 	err := run([]string{"serve", "-app-name", "myapp"})
-	if err == nil || !strings.Contains(err.Error(), "main checkout") {
-		t.Fatalf("expected main checkout guidance, got %v", err)
+	if err == nil || !strings.Contains(err.Error(), "main or master branch") {
+		t.Fatalf("expected main or master branch guidance, got %v", err)
 	}
 }

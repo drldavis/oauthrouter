@@ -1,6 +1,8 @@
 package oauthrouter_test
 
 import (
+	"bytes"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -95,5 +97,42 @@ func TestBaseURLAndCallbackPathsAreValidated(t *testing.T) {
 		if response.Code != want {
 			t.Fatalf("%s: %d", path, response.Code)
 		}
+	}
+}
+
+func TestRedirectsAreLoggedWithoutQueryParameters(t *testing.T) {
+	var output bytes.Buffer
+	previousWriter := log.Writer()
+	log.SetOutput(&output)
+	t.Cleanup(func() { log.SetOutput(previousWriter) })
+	handler, err := oauthrouter.New("http://myapp.localhost:1355")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct{ state, result, destination string }{
+		{".private-state", "code=private-code", "http://myapp.localhost:1355/oauth/callback"},
+		{"feature-a.private-state", "error=access_denied&error_description=private-description", "http://feature-a.myapp.localhost:1355/oauth/callback"},
+	} {
+		output.Reset()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest("GET", "/oauth/callback?state="+test.state+"&"+test.result+"&extra=private-extra", nil))
+		if response.Code != http.StatusFound {
+			t.Fatalf("status %d", response.Code)
+		}
+		entry := output.String()
+		if strings.Count(entry, "\n") != 1 || !strings.Contains(entry, test.destination) {
+			t.Fatalf("expected one destination log, got %q", entry)
+		}
+		for _, secret := range []string{"private-state", "private-code", "access_denied", "private-description", "private-extra", "?"} {
+			if strings.Contains(entry, secret) {
+				t.Fatalf("log contains query data: %q", entry)
+			}
+		}
+	}
+	output.Reset()
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/oauth/callback?state=invalid", nil))
+	if response.Code != http.StatusBadRequest || output.Len() != 0 {
+		t.Fatalf("invalid callback logged as redirect: status %d, log %q", response.Code, output.String())
 	}
 }

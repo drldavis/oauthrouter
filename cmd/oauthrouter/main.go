@@ -25,7 +25,7 @@ func run(args []string) error {
 		return errors.New("usage: oauthrouter serve -app-name myapp [-listen 127.0.0.1:9090]")
 	}
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
-	appName := flags.String("app-name", "", "Portless app name; run from its main checkout (required)")
+	appName := flags.String("app-name", "", "Portless app name; run from the main or master branch (required)")
 	listen := flags.String("listen", "127.0.0.1:9090", "loopback listen address")
 	var callbackPaths pathsFlag
 	flags.Var(&callbackPaths, "callback-path", "accepted callback path (repeatable; default /oauth/callback)")

@@ -11,14 +11,14 @@ import (
 )
 
 // NewFromPortless discovers the base URL with "portless get <appName>".
-// Run it from the application's main checkout, not a linked worktree.
+// Run it from the main or master branch so Portless returns a URL without a worktree prefix.
 func NewFromPortless(appName string, callbackPaths ...string) (http.Handler, error) {
 	origin, err := discoverOrigin(appName)
 	if err != nil {
 		return nil, err
 	}
 	if origin.Hostname() != appName+".localhost" {
-		return nil, fmt.Errorf("expected main checkout URL for %q; run oauthrouter from the main checkout (Portless returned %s)", appName, origin)
+		return nil, fmt.Errorf("expected a URL without a worktree prefix for %q; run oauthrouter from the main or master branch (Portless returned %s)", appName, origin)
 	}
 	return New(origin.String(), callbackPaths...)
 }
